@@ -3294,7 +3294,7 @@ class OauthController extends Controller
     {
         config(['services.doximity.client_id' => env('DOXIMITY_CLIENT_ID')]);
         config(['services.doximity.client_secret' => env('DOXIMITY_CLIENT_SECRET')]);
-        config(['services.doximity.redirect' => secure_url('doximity_redirect')]);
+        config(['services.doximity.redirect' => env('DOXIMITY_REDIRECT')]);
         return Socialite::driver('doximity')->redirect();
     }
 
@@ -3302,7 +3302,7 @@ class OauthController extends Controller
     {
         config(['services.doximity.client_id' => env('DOXIMITY_CLIENT_ID')]);
         config(['services.doximity.client_secret' => env('DOXIMITY_CLIENT_SECRET')]);
-        config(['services.doximity.redirect' => secure_url('doximity_redirect')]);
+        config(['services.doximity.redirect' => env('DOXIMITY_REDIRECT')]);
         try {
             $user = Socialite::driver('doximity')->user();
         } catch(\Exception $e){
