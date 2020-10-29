@@ -10,6 +10,7 @@ WEB=/opt
 HIE=$WEB/hieofone-directory
 ENV=$HIE/.env
 PRIVKEY=$HIE/.privkey.pem
+PRIVKEY_ED=$HIE/.privkey.ed.jwk
 PUBKEY=$HIE/.pubkey.pem
 INSTALL_TYPE=2
 
@@ -171,6 +172,9 @@ sed -i '/^DB_USERNAME=/s/=.*/='"$MYSQL_USERNAME"'/' .env
 sed -i '/^DB_PASSWORD=/s/=.*/='"$MYSQL_PASSWORD"'/' .env
 openssl genrsa -out $PRIVKEY 2048
 openssl rsa -in $PRIVKEY -pubout -out $PUBKEY
+test -s "$PRIVKEY_ED" || didkit generate-ed25519-key >$PRIVKEY_ED
+did=$(didkit key-to-did-key -k "$PRIVKEY_ED")
+echo "DID=$did" >> .env
 chown -R $WEB_GROUP.$WEB_USER $HIE
 chmod -R 755 $HIE
 chmod -R 777 $HIE/storage

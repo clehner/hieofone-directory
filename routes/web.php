@@ -77,7 +77,6 @@ Route::any('login', ['as' => 'login', 'uses' => 'OauthController@login']);
 Route::any('logout', ['as' => 'logout', 'uses' => 'OauthController@logout']);
 Route::post('login_uport/{admin?}', ['as' => 'login_uport', 'middleware' => 'csrf', 'uses' => 'OauthController@login_uport']);
 Route::any('uport_user_add', ['as' => 'uport_user_add', 'uses' => 'OauthController@uport_user_add']);
-Route::post('uport_ether_notify', ['as' => 'uport_ether_notify', 'middleware' => 'csrf', 'uses' => 'OauthController@uport_ether_notify']);
 Route::any('remote_logout', ['as' => 'remote_logout', 'uses' => 'OauthController@remote_logout']);
 Route::get('home', ['as' => 'home', 'uses' => 'HomeController@index']);
 Route::get('all_patients', ['as' => 'all_patients', 'uses' => 'HomeController@all_patients']);
@@ -205,7 +204,8 @@ Route::get('installgoogle', ['as' => 'installgoogle', 'uses' => 'OauthController
 Route::get('doximity', ['as' => 'doximity', 'uses' => 'OauthController@doximity']);
 Route::get('doximity_redirect', ['as' => 'doximity_redirect', 'uses' => 'OauthController@doximity_redirect']);
 Route::get('doximity_start', ['as' => 'doximity_start', 'uses' => 'OauthController@doximity_start']);
-Route::get('doximity_uport', ['as' => 'doximity_uport', 'uses' => 'OauthController@doximity_uport']);
+Route::get('doximity_vc', ['as' => 'doximity_vc', 'uses' => 'OauthController@doximity_vc']);
+Route::any('vc_offer', ['as' => 'vc_offer', 'uses' => 'OauthController@vc_offer']);
 // Configuration endpoints
 Route::get('.well-known/openid-configuration', ['as' => 'openid-configuration', function () {
     $scopes = DB::table('oauth_scopes')->get();

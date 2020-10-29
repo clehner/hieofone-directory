@@ -7,9 +7,11 @@ use App\User;
 use Artisan;
 use Auth;
 use Cache\Adapter\Filesystem\FilesystemCachePool;
+use Carbon\Carbon;
 use Crypt;
 use Date;
 use DB;
+use DIDKit\DIDKit;
 use File;
 use Google_Client;
 use GuzzleHttp;
@@ -3313,7 +3315,7 @@ class OauthController extends Controller
         $data['specialty'] = $user_details->specialty;
         Session::put('doximity_npi', $user_details->npi);
         Session::put('doximity_specialty', $user_detils->specialty);
-        return redirect()->route('doximity_uport');
+        return redirect()->route('doximity_vc');
     }
 
     public function doximity_start(Request $request)
@@ -3325,26 +3327,78 @@ class OauthController extends Controller
         return view('doximity', $data);
     }
 
-    public function doximity_uport(Request $request)
+    public function doximity_vc(Request $request)
     {
-        $data['npi'] = Session::get('doximity_npi');
-        $data['specialty'] = Session::get('doximity_specialty');
-        Session::forget('doximity_npi');
-        Session::forget('doximity_specialty');
         if (Session::has('last_page')) {
             $data['finish'] = Session::get('last_page');
             Session::forget('last_page');
         } else {
             $data['finish'] = route('login');
         }
+        $npi = Session::get('doximity_npi');
+        $specialty = Session::get('doximity_specialty');
+        if (!$npi) return redirect()->route('doximity_start');
+        $issuer = env('DID');
+        $lifetime = 86400 * 30;
+        $id = $this->gen_uuid();
+        $credential = [
+            '@context' => ['https://www.w3.org/2018/credentials/v1', 'https://schema.org'],
+            'id' => 'urn:uuid:'.$id,
+            'type' => 'VerifiableCredential',
+            'issuer' => $issuer,
+            'issuanceDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            'expirationDate' => gmdate('Y-m-d\TH:i:s\Z', time() + $lifetime),
+            'credentialSubject' => [
+                'identifier' => 'npi:'.$npi,
+                // 'specialty' => $specialty,
+            ]
+        ];
+        $offer = [
+            'id' => $id,
+            'credential' => json_encode($credential),
+            'expires' => Carbon::now()->addMinutes(15),
+        ];
+        $data['vc_offer_url'] = url('vc_offer') . '?id=' . $offer['id'];
+        DB::table('vc_offers')->insert($offer);
+        Session::forget('doximity_npi');
+        Session::forget('doximity_specialty');
         return view('doximity', $data);
     }
 
-    public function uport_ether_notify(Request $request)
+    public function vc_offer(Request $request)
     {
-        $data_message['message_data'] = 'uPort ID: ' . $request->input('address') . '<br>Name: ' . $request->input('name');
-        $to = env('UPORT_ETHER_NOTIFY');
-        $this->send_mail('auth.emails.generic', $data_message, 'Test E-mail', $to);
-        return 'OK';
+        $offer_id = $request->input('id');
+        $offer = DB::table('vc_offers')->find($offer_id);
+        if (!$offer) return response('Offer not found', 404);
+        if ($offer->issued) return response('Offer already used', 403);
+        $expires = strtotime($offer->expires);
+        if ($expires < time()) return response('Offer expired', 410);
+        $credential = json_decode($offer->credential);
+        if (!$request->isMethod('post')) {
+            // View Offer
+            $response = [
+                'type' => 'CredentialOffer',
+                'credentialPreview' => $credential,
+                'expires' => gmdate('Y-m-d\TH:i:s\Z', $expires)
+            ];
+            return response()->json($response);
+        } else {
+            // Accept Offer
+            $subject_id = $request->input('subject_id');
+            if (!$subject_id) return response('Missing subject_id in request', 400);
+            $credential->credentialSubject->id = $subject_id;
+            $options = [
+                'proofPurpose' => 'assertionMethod',
+                'verificationMethod' => env('DID')
+            ];
+            $key_filename = base_path() . '/.privkey.ed.jwk';
+            $vc = DIDKit::issueCredential($credential, $options, $key_filename);
+
+            DB::table('vc_offers')->where('id', $offer_id)->update([
+                'issued' => true
+            ]);
+            return response($vc)
+                ->header('Content-Type', 'application/ld+json');
+        }
     }
 }

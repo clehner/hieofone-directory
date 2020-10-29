@@ -114,8 +114,8 @@
 						@if (!isset($nooauth))
 						<div class="form-group">
 							<div class="col-md-8 col-md-offset-2">
-								<button type="button" class="btn btn-primary btn-block" id="connectUportBtn" onclick="loginBtnClick()">
-									<img src="{{ asset('assets/uport-logo-white.svg') }}" height="25" width="25" style="margin-right:5px"></img> Sign In with uPort
+								<button type="button" class="btn btn-primary btn-block" onclick="loginBtnClick()">
+									Sign In with Credential Wallet
 								</button>
 								<button type="button" class="btn btn-primary btn-block" id="connectUportBtn1"><i class="fa fa-btn fa-plus"></i> Add Doximity Clinician Verification</button>
 

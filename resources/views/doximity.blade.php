@@ -1,7 +1,6 @@
 @extends('layouts.app')
 
 @section('view.stylesheet')
-	<link rel="stylesheet" href="{{ asset('assets/css/toastr.min.css') }}">
 	<style>
 	html {
 		position: relative;
@@ -49,26 +48,26 @@
 						</div>
 					</div>
 					@if (isset($start))
-						<div class="form-group" id="doximity" doximity="start">
+						<div class="form-group">
+							<div class="col-md-6 col-md-offset-3">
+								<a class="btn btn-primary btn-block" href="{{ route('doximity') }}">
+									<i class="fa fa-btn fa-openid"></i> Verify with Doximity
+								</a>
+							</div>
+						</div>
 					@else
-						<div class="form-group" id="doximity" doximity="uport">
+						<div class="form-group">
 							<div style="text-align: center;">
-								<i class="fa fa-spinner fa-spin fa-pulse fa-2x fa-fw"></i><span id="modaltext" style="margin:10px">Loading uPort...</span><br><br>
+								<p>Please scan this QR code with your credential wallet to receive the credential:</p>
+								{!! QrCode::size(300)->generate($vc_offer_url) !!}
+							</div>
+						</div>
+							<div class="col-md-6 col-md-offset-3">
+								<button type="Button" class="btn btn-primary btn-block" onclick="$('#modal2').modal('show')">
+									Continue
+								</button>
 							</div>
 					@endif
-						<div class="col-md-6 col-md-offset-3">
-							<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn" onclick="loginBtnClick()"> -->
-								<!-- <img src="{{ asset('assets/uport-logo-white.svg') }}" height="25" width="25" style="margin-right:5px"></img> Login with uPort -->
-							<!-- </button> -->
-							<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn1">Add NPI credential to uPort</button> -->
-							<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn1" onclick="uportConnect()">Connect uPort</button> -->
-							<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn2" onclick="sendEther()">Send Ether</button> -->
-							<a class="btn btn-primary btn-block" href="{{ route('doximity') }}">
-								<i class="fa fa-btn fa-openid"></i> Verify with Doximity
-							</a>
-
-						</div>
-					</div>
 				</div>
 			</div>
 		</div>
@@ -79,10 +78,10 @@
 	<div class="modal-dialog">
 	  <!-- Modal content-->
 		<div class="modal-content">
-			<div id="modal1_header" class="modal-header">Add NPI credential to uPort?</div>
+			<div id="modal1_header" class="modal-header">Add NPI credential to credential wallet?</div>
 			<div id="modal1_body" class="modal-body" style="height:30vh;overflow-y:auto;">
-				<p>This will simulate adding a verified credential to your existing uPort.</p>
-				<p>After the simulated NPI credential is added, click on Login with uPort</p>
+				<p>This will simulate adding a verifiable credential to your existing credential wallet.</p>
+				<p>After the simulated NPI credential is added, click on Sign in with credential wallet</p>
 				<p>This will enable you to write a prescription.</p>
 			</div>
 			<div class="modal-footer">
@@ -98,12 +97,12 @@
 		<div class="modal-content">
 			<div id="modal1_header" class="modal-header">
 				<button type="button" class="close" data-dismiss="modal">&times;</button>
-				<h4>Doximity Credentials to uPort</h4>
+				<h4>Doximity Credentials to Credential Wallet</h4>
 			</div>
 			<div id="modal1_body" class="modal-body" style="height:60vh;overflow-y:auto;">
-				<p>You should have successfully added Doximity credentials to your uPort.</p>
-				<p>The crediential expires in 1 month.  Return to this site to renew it.</p>
-				<p>You can verify this by clicking on Verifications in your uPort App with a verification coming from HIE of One with NPI and Speciality claims added.</p>
+				<p>You should have successfully added Doximity credentials to your credential wallet.</p>
+				<p>The credential expires in 1 month.  Return to this site to renew it.</p>
+				<p>You can verify this by clicking on Verifications in your credential wallet with a verification coming from HIE of One with NPI and Speciality claims added.</p>
 				<p>
 				<!-- <p><a href="https://shihjay.xyz/nosh">Click here to access Alice's Health Record again</a></p> -->
 				<p>Problems adding your credentials?</p>
@@ -116,134 +115,4 @@
 @endsection
 
 @section('view.scripts')
-<script src="{{ asset('assets/js/web3.js') }}"></script>
-<script src="{{ asset('assets/js/uport-connect.js') }}"></script>
-<script src="{{ asset('assets/js/toastr.min.js') }}"></script>
-<script type="text/javascript">
-
-	// Setup
-	const Connect = window.uportconnect;
-	const appName = 'Doximity';
-	const uport = new Connect(appName, {
-		network: 'rinkeby'
-	});
-	// const web3 = new Web3(window.web3.currentProvider);
-
-	const loginBtnClick = () => {
-		uport.requestDisclosure({
-	      requested: ['name', 'email'],
-	      notifications: true // We want this if we want to recieve credentials
-	  	});
-		uport.onResponse('disclosureReq').then((res) => {
-			var did = res.payload.did;
-			var credentials = res.payload.verified;
-			console.log(res.payload);
-			var uport_url = '<?php echo route("login_uport"); ?>';
-			var uport_data = 'name=' + res.payload.name + '&uport=' + res.payload.did;
-			if (typeof res.payload.NPI !== 'undefined') {
-				uport_data += '&npi=' + res.payload.NPI;
-			}
-			if (typeof res.payload.email !== 'undefined') {
-				uport_data += '&email=' + res.payload.email;
-			}
-			$.ajax({
-				type: "POST",
-				url: uport_url,
-				data: uport_data,
-				dataType: 'json',
-				beforeSend: function(request) {
-					return request.setRequestHeader("X-CSRF-Token", $("meta[name='csrf-token']").attr('content'));
-				},
-				success: function(data){
-					if (data.message !== 'OK') {
-						toastr.error(data.message);
-						// console.log(data);
-					} else {
-						window.location = data.url;
-					}
-				}
-			});
-		}, console.err);
-	};
-
-	let globalState = {
-		uportId: "",
-		txHash: "",
-		sendToAddr: "0x687422eea2cb73b5d3e242ba5456b782919afc85",
-		sendToVal: "5"
-	};
-
-	const uportConnect = function () {
-		web3.eth.getCoinbase((error, address) => {
-			if (error) { throw error; }
-			console.log(address);
-			globalState.uportId = address;
-		});
-	};
-
-	const sendEther = () => {
-		const value = parseFloat(globalState.sendToVal) * 1.0e18;
-		const gasPrice = 100000000000;
-		const gas = 500000;
-		web3.eth.sendTransaction(
-			{
-				from: globalState.uportId,
-				to: globalState.sendToAddr,
-				value: value,
-				gasPrice: gasPrice,
-				gas: gas
-			},
-			(error, txHash) => {
-				if (error) { throw error; }
-				globalState.txHash = txHash;
-				console.log(txHash);
-			}
-		);
-	};
-
-	const attest = () => {
-		uport.requestDisclosure({
-			requested: ['name', 'email', 'NPI'],
-			notifications: true // We want this if we want to recieve credentials
-	  	});
-		uport.onResponse('disclosureReq').then((res) => {
-			var did = res.payload.did;
-			var credentials = res.payload.verified;
-			console.log(res.payload);
-			uport.sendVerification({
-			  claim: { "NPI": "{{ $npi }}" },
-			  exp: Math.floor(new Date().getTime() / 1000) + 30 * 24 * 60 * 60
-			})
-			var uport_email_url = '<?php echo route("uport_ether_notify"); ?>';
-			var uport_email_data = 'name=' + res.payload.name + '&address=' + res.payload.did;
-			$.ajax({
-				type: "POST",
-				url: uport_email_url,
-				data: uport_email_data,
-				dataType: 'json',
-				beforeSend: function(request) {
-					return request.setRequestHeader("X-CSRF-Token", $("meta[name='csrf-token']").attr('content'));
-				},
-				success: function(data){
-					if (data.message !== 'OK') {
-						toastr.error(data.message);
-						// console.log(data);
-					}
-				}
-			});
-			$('#modal2').modal('show');
-		});
-	}
-	$(document).ready(function() {
-		$('[data-toggle="tooltip"]').tooltip();
-		var start = $('#doximity').attr('doximity');
-		if (start == 'uport') {
-			attest();
-		}
-		$('#close_modal2').click(function() {
-			$('#modal2').modal('hide');
-			return false;
-		});
-	});
-</script>
 @endsection

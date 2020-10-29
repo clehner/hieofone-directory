@@ -31,6 +31,7 @@ file_env MAILGUN_SECRET
 file_env ASSET_URL
 file_env PUBKEY
 file_env PRIVKEY
+file_env PRIVKEY_ED
 file_env NEXMO_API
 file_env NEXMO_SECRET
 file_env ZAMMAD_CLIENT

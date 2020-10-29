@@ -60,7 +60,8 @@
         ],
         "psr-4": {
             "App\\": "app/",
-            "SocialiteProviders\\Doximity\\": "SocialiteProviders/Doximity/src/"
+            "SocialiteProviders\\Doximity\\": "SocialiteProviders/Doximity/src/",
+            "DIDKit\\": "DIDKit/"
         }
     },
     "autoload-dev": {
