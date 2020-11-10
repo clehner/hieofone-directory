@@ -52,6 +52,18 @@ class DIDKit
             .' --key '.$key_filename;
         return didkit($cmd, $credential);
     }
+
+    static function verifyCredential($credential, $options) {
+        if (!is_string($credential)) $credential = json_encode($credential);
+        $cmd = 'vc-verify-credential '.cli_options($options);
+        return didkit($cmd, $credential, TRUE);
+    }
+
+    static function verifyPresentation($presentation, $options) {
+        if (!is_string($presentation)) $presentation = json_encode($presentation);
+        $cmd = 'vc-verify-presentation '.cli_options($options);
+        return didkit($cmd, $presentation, TRUE);
+    }
 }
 
 class Exception extends \Exception {

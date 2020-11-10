@@ -10,6 +10,7 @@ use Cache\Adapter\Filesystem\FilesystemCachePool;
 use Carbon\Carbon;
 use Crypt;
 use Date;
+use DateTimeImmutable;
 use DB;
 use DIDKit\DIDKit;
 use File;
@@ -1004,6 +1005,171 @@ class OauthController extends Controller
         }
     }
 
+    protected function login_vp_received($vp_json, $owner, $data)
+    {
+        $data['vp_received'] = true;
+        $vp = json_decode($vp_json);
+        $vc = $vp->verifiableCredential;
+        $vc_verify_options = [
+            'proofPurpose' => 'assertionMethod',
+        ];
+        try {
+            $verify_result = json_decode(DIDKit::verifyCredential($vc, $vc_verify_options));
+            if (count($verify_result->errors) > 0) {
+                throw new Exception(implode('; ', $verify_result->errors));
+            }
+        } catch(\Exception $e) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'We were unable to verify the credential. Error: ' . $e->getMessage()]);
+        }
+        if ($vc->issuer != env('DID')) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'Credential was issued by an untrusted party']);
+        }
+        if ($vp->holder != $vc->credentialSubject->id) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'Credential subject does not match holder']);
+        }
+        // Get NPI from credential
+        $identifier = @$vc->credentialSubject->identifier;
+        $npi = preg_match('/^npi:(\d{10})$/', $identifier, $m) ? $m[1] : NULL;
+        if (!$npi) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'We did not find a NPI in that credential. Please try a different credential.']);
+        }
+        // Look up account by NPI
+        $oauth_user = DB::table('oauth_users')->where('npi', '=', $npi)->first();
+        if (!$oauth_user) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'You are not authorized to access this Directory. Your NPI does not exist in our system.']);
+        }
+        // Log in the user
+        $admin_status = $oauth_user->sub == $owner->sub
+            || DB::table('owner')->where('sub', '=', $oauth_user->sub)->exists()
+            ? 'yes' : 'no';
+        $client_id = Session::get('oauth_response_type') == 'code'
+            ? Session::get('oauth_client_id')
+            : $owner->client_id;
+        $user = DB::table('users')->where('email', '=', $oauth_user->email)->first();
+        if (!$user) {
+            return view('auth.login', $data)->withErrors(['tryagain' => 'There was a problem looking up your account. Please contact the owner of this authorization server for assistance.']);
+        }
+        Session::put('login_origin', 'login_direct');
+        $this->login_sessions($oauth_user, $client_id, $admin_status);
+        Auth::loginUsingId($user->id);
+        $this->activity_log($user->email, 'Login - Verifiable Credential');
+        Session::forget('login_vp');
+        Session::save();
+        if (Session::has('uma_permission_ticket') && Session::has('uma_redirect_uri') && Session::has('uma_client_id') && Session::has('email')) {
+            // If generated from rqp_claims endpoint, do this
+            return redirect()->route('rqp_claims');
+        }
+        if (Session::get('oauth_response_type') == 'code') {
+            // Confirm if client is authorized
+            $authorized = DB::table('oauth_clients')->where('client_id', '=', $client_id)->where('authorized', '=', 1)->first();
+            if ($authorized) {
+                // This call is from authorization endpoint and client is authorized.  Check if user is associated with client
+                $user_array = explode(' ', $authorized->user_id);
+                if (in_array($oauth_user->username, $user_array)) {
+                    // Go back to authorize route
+                    Session::put('is_authorized', 'true');
+                    return redirect()->route('authorize');
+                } else {
+                    // Get user permission
+                    return redirect()->route('login_authorize');
+                }
+            } else {
+                // Get owner permission if owner is logging in from new client/registration server
+                if ($oauth_user) {
+                    if ($owner_query->sub == $oauth_user->sub) {
+                        return redirect()->route('authorize_resource_server');
+                    } else {
+                        // Somehow, this is a registered user, but not the owner, and is using an unauthorized client - return back to login screen
+                        return view('auth.login', $data)->withErrors(['tryagain' => 'Unauthorized client.  Please contact the owner of this authorization server for assistance.']);
+                    }
+                } else {
+                    // Not a registered user
+                    return view('auth.login', $data)->withErrors(['tryagain' => 'Not a registered user.  Please contact the owner of this authorization server for assistance.']);
+                }
+            }
+        } else {
+            // This call is directly from the home route.
+            return redirect()->route('home');
+        }
+    }
+
+    public function login_vp(Request $request)
+    {
+        if (!Auth::guest()) return redirect()->route('home');
+        $owner = DB::table('owner')->first();
+        if (!$owner) return redirect()->route('install');
+        if ($request->input('retry_vp')) {
+            Session::forget('login_vp');
+            return back();
+        }
+        $data['name'] = $owner->org_name;
+        $data['noheader'] = true;
+        $data['nooauth'] = true;
+        if (file_exists(base_path() . '/.version')) {
+            $data['version'] = file_get_contents(base_path() . '/.version');
+        } else {
+            $version = $this->github_all();
+            $data['version'] = $version[0]['sha'];
+        }
+        $vp_request_id = Session::get('login_vp');
+        $vp_request_row = $vp_request_id ?
+            DB::table('vp_requests')->find($vp_request_id) : NULL;
+        if ($vp_request_row) {
+            $vp_json = $vp_request_row->presentation;
+            if ($vp_json) {
+                // Handle VP received
+                return $this->login_vp_received($vp_json, $owner, $data);
+            }
+            // Use existing VP request if not expired
+            $expires = new Carbon($vp_request_row->expires);
+            if ($expires < Carbon::now()) $vp_request_row = NULL;
+        }
+        if (!$vp_request_row) {
+            // Create VP request
+            $vp_request_id = $this->gen_uuid();
+            $expires = Carbon::now()->addMinutes(15);
+            $org_name = $owner && $owner->org_name ?
+                'Directory for '.$owner->org_name : 'Directory';
+            $credential_query = [
+                'reason' => 'Sign in to '.$org_name,
+                'example' => [
+                    '@context' => ['https://www.w3.org/2018/credentials/v1', 'https://schema.org'],
+                    'type' => 'VerifiableCredential'
+                ]
+            ];
+            $query = [
+                [
+                    'type' => 'QueryByExample',
+                    'credentialQuery' => $credential_query
+                ]
+            ];
+            $vp_request_row = [
+                'id' => $vp_request_id,
+                'expires' => $expires,
+                'query' => json_encode($query)
+            ];
+            Session::put('login_vp', $vp_request_id);
+            DB::table('vp_requests')->insert($vp_request_row);
+        }
+        $data['vp_request_url'] = url('vp_request') . '?id=' . $vp_request_id;
+        $data['vp_request_expiration'] = $expires;
+        return view('auth.login', $data);
+    }
+
+    public function login_vp_poll(Request $request)
+    {
+        $vp_request_id = Session::get('login_vp');
+        if (!$vp_request_id) return response('no vp request for session', 400);
+        $vp_request = DB::table('vp_requests')->find($vp_request_id);
+        if (!$vp_request) return response('vp request not found', 404);
+        $expires = new Carbon($vp_request->expires);
+        $expired = $expires < Carbon::now();
+        if ($expired) return response('vp request expired', 410);
+        $vp = $vp_request->presentation;
+        if (!$vp) return response('vp not yet received', 403);
+        return response('vp received', 200);
+    }
+
     public function logout(Request $request)
     {
         Session::flush();
@@ -1019,178 +1185,6 @@ class OauthController extends Controller
             return redirect($redirect_uri);
         }
         return redirect()->route('welcome');
-    }
-
-    public function login_uport(Request $request, $admin='')
-    {
-        $owner_query = DB::table('owner')->first();
-        $proxies = DB::table('owner')->where('sub', '!=', $owner_query->sub)->get();
-        $proxy_arr = [];
-        if ($proxies) {
-            foreach ($proxies as $proxy_row) {
-                $proxy_arr[] = $proxy_row->sub;
-            }
-        }
-        if ($request->has('uport')) {
-            $proceed = false;
-            $admin_status = 'no';
-            if ($admin == 'admin') {
-                $admin_parser = new Parser();
-                $admin_nameObject = $admin_parser->parse($request->input('name'));
-                $admin_name_query = DB::table('owner')->where('firstname', '=', $admin_nameObject->getFirstName())->where('lastname', '=', $admin_nameObject->getLastName())->first();
-                if ($admin_name_query) {
-                    $uport_user = DB::table('oauth_users')->where('sub', '=', $admin_name_query->sub)->first();
-                    $proceed = true;
-                    $admin_status = 'yes';
-                } else {
-                    $return['message'] = 'You are not authorized to access this Directory';
-                }
-            } else {
-                $user_table = 'oauth_users';
-                $uport_static = 'npi';
-                $user_table_result = DB::select('SHOW INDEX FROM ' . $user_table . " WHERE Key_name = 'PRIMARY'");
-                $user_table_result_arr = json_decode(json_encode($user_table_result), true);
-                $table_key = $user_table_result_arr[0]['Column_name'];
-                $uport_credentials = [
-                    'name' => [
-                        'fname' => 'first_name',
-                        'lname' => 'last_name',
-                        'description' => 'Name'
-                    ],
-                    'email' => [
-                        'column' => 'email',
-                        'description' => 'E-mail address'
-                    ],
-                    'npi' => [
-                        'column' => 'npi',
-                        'description' => 'NPI number'
-                    ],
-                    'uport' => [
-                        'column' => 'uport_id',
-                        'description' => 'uport address'
-                    ]
-                ];
-                $username_arr = [];
-                $static = '';
-                $missing_creds = [];
-                foreach ($uport_credentials as $uport_credential_key => $uport_credential_value) {
-                    if ($uport_credential_key == 'name') {
-                        $parser = new Parser();
-                        $nameObject = $parser->parse($request->input('name'));
-                        $name_query = DB::table($user_table)->where($uport_credential_value['fname'], '=', $nameObject->getFirstName())->where($uport_credential_value['lname'], '=', $nameObject->getLastName())->get();
-                        if ($name_query) {
-                            foreach ($name_query as $name_row) {
-                                $username_arr[$uport_credential_key][] = $name_row->{$table_key};
-                            }
-                        }
-                    } else {
-                        if ($request->has($uport_credential_key)) {
-                            $cred_query = DB::table($user_table)->where($uport_credential_value['column'], '=', $request->input($uport_credential_key))->first();
-                            if ($cred_query) {
-                                $username_arr[$uport_credential_key] = $cred_query->{$table_key};
-                                if ($uport_static == $uport_credential_key) {
-                                    $static = $cred_query->{$table_key};
-                                }
-                                if ($cred_query->sub == $owner_query->sub || in_array($cred_query->sub, $proxy_arr)) {
-                                    //Admin user - start override
-                                    $proceed = true;
-                                    $uport_user = DB::table($user_table)->where($table_key, '=',  $cred_query->{$table_key})->first();
-                                }
-                            }
-                        } else {
-                            $missing_creds[] = $uport_credential_key;
-                        }
-                    }
-                }
-                if (empty($missing_creds)) {
-                    if (! empty($username_arr)) {
-                        // Check if static credential's username matches existing user
-                        if ($static !== '') {
-                            // There is a user with a static credential in the system
-                            // Update any non-static entries if different
-                            $uport_user = DB::table($user_table)->where($table_key, '=', $static)->first();
-                            $static_data = [];
-                            foreach ($uport_credentials as $uport_credential_key1 => $uport_credential_value1) {
-                                if ($uport_user->{$uport_credential_value1['column']} !== $request->input($uport_credential_key1)) {
-                                    $static_data[$uport_credential_value1['column']] = $request->input($uport_credential_key1);
-                                }
-                            }
-                            if (! empty($static_data)) {
-                                DB::table($table)->where($table_key, '=', $static)->update($static_data);
-                            }
-                            $proceed = true;
-                        } else {
-                            $return['message'] = 'You are not authorized to access this Directory.  Your ' . $uport_credentials[$uport_static]['description'] . ' does not exist in our system.';
-                        }
-                    } else {
-                        $return['message'] = 'You are not authorized to access this Directory';
-                    }
-                } else {
-                    $return['message'] = 'You are missing these credentials from your uPort: ';
-                    $missing_ct = 0;
-                    foreach ($missing_creds as $missing_cred) {
-                        if ($missing_ct > 0) {
-                            $return['message'] .= ', ';
-                        }
-                        $return['message'] .= $uport_credentials[$missing_cred]['description'];
-                        $missing_ct++;
-                    }
-                }
-            }
-        } else {
-            $return['message'] = 'Please contact the owner of this authorization server for assistance.';
-        }
-        if ($proceed == true) {
-            if (Session::get('oauth_response_type') == 'code') {
-                $client_id = Session::get('oauth_client_id');
-            } else {
-                $client_id = $owner_query->client_id;
-            }
-            Session::put('login_origin', 'login_direct');
-            $this->login_sessions($uport_user, $client_id, $admin_status);
-            $user = DB::table('users')->where('email', '=', $uport_user->email)->first();
-            Auth::loginUsingId($user->id);
-            $this->activity_log($user->email, 'Login - uPort');
-            Session::save();
-            $return['message'] = 'OK';
-            if (Session::has('uma_permission_ticket') && Session::has('uma_redirect_uri') && Session::has('uma_client_id') && Session::has('email')) {
-                // If generated from rqp_claims endpoint, do this
-                $return['url'] = route('rqp_claims');
-            }
-            if (Session::get('oauth_response_type') == 'code') {
-                // Confirm if client is authorized
-                $authorized = DB::table('oauth_clients')->where('client_id', '=', $client_id)->where('authorized', '=', 1)->first();
-                if ($authorized) {
-                    // This call is from authorization endpoint and client is authorized.  Check if user is associated with client
-                    $user_array = explode(' ', $authorized->user_id);
-                    if (in_array($uport_user->username, $user_array)) {
-                        // Go back to authorize route
-                        Session::put('is_authorized', 'true');
-                        $return['url'] = route('authorize');
-                    } else {
-                        // Get user permission
-                        $return['url'] = route('login_authorize');
-                    }
-                } else {
-                    // Get owner permission if owner is logging in from new client/registration server
-                    if ($oauth_user) {
-                        if ($owner_query->sub == $uport_user->sub) {
-                            $return['url'] = route('authorize_resource_server');
-                        } else {
-                            // Somehow, this is a registered user, but not the owner, and is using an unauthorized client - return back to login screen
-                            $return['message'] = 'Unauthorized client.  Please contact the owner of this authorization server for assistance.';
-                        }
-                    } else {
-                        // Not a registered user
-                        $return['message'] = 'Not a registered user.  Please contact the owner of this authorization server for assistance.';
-                    }
-                }
-            } else {
-                //  This call is directly from the home route.
-                $return['url'] = route('home');
-            }
-        }
-        return $return;
     }
 
     public function uport_user_add(Request $request)
@@ -3399,6 +3393,48 @@ class OauthController extends Controller
             ]);
             return response($vc)
                 ->header('Content-Type', 'application/ld+json');
+        }
+    }
+
+    public function vp_request(Request $request)
+    {
+        $vp_request_id = $request->input('id');
+        $vp_request_row = DB::table('vp_requests')->find($vp_request_id);
+        if (!$vp_request_row) return response('Request not found', 404);
+        if ($vp_request_row->presentation) return response('Request already answered', 403);
+        $expires = strtotime($vp_request_row->expires);
+        if ($expires < time()) return response('Request expired', 410);
+        $owner = DB::table('owner')->first();
+        $domain = parse_url(url(''), PHP_URL_HOST);
+        $challenge = $vp_request_id;
+        if (!$request->isMethod('post')) {
+            // View request
+            $vp_request = [
+                'type' => 'VerifiablePresentationRequest',
+                'query' => json_decode($vp_request_row->query),
+                'challenge' => $challenge,
+                'domain' => $domain
+            ];
+            return response()->json($vp_request);
+        } else {
+            // Accept request
+            $vp_json = $request->input('presentation');
+            if (!$vp_json) return response('Missing presentation', 400);
+            $vp_verify_options = [
+                'challenge' => $challenge,
+                'domain' => $domain,
+                'proofPurpose' => 'authentication'
+            ];
+            try {
+                DIDKit::verifyPresentation($vp_json, $vp_verify_options);
+            } catch(\Exception $e){
+                return response('Unable to verify presentation: '.$e->getMessage(), 400);
+            }
+            // Save the VP for further processing in the user's session.
+            DB::table('vp_requests')->where('id', $vp_request_id)->update([
+                'presentation' => $vp_json
+            ]);
+            return response('', 200);
         }
     }
 }

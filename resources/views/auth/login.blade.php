@@ -1,7 +1,6 @@
 @extends('layouts.app')
 
 @section('view.stylesheet')
-	<link rel="stylesheet" href="{{ asset('assets/css/toastr.min.css') }}">
 	<style>
 	html {
 		position: relative;
@@ -37,7 +36,12 @@
 				<div class="panel-heading">
 					<div class="container-fluid panel-container">
 						<div class="col-xs-6 col-md-9 text-left">
-							<h4 class="panel-title" style="height:35px;display:table-cell !important;vertical-align:middle;">Sign In</h4>
+							<h4 class="panel-title" style="height:35px;display:table-cell !important;vertical-align:middle;">
+								Sign In
+								@if (isset($vp_request_url))
+								with Credential Wallet
+								@endif
+							</h4>
 						</div>
 						<div class="col-xs-3 text-right">
 							<button type="button" class="btn btn-primary" id="admin_button" title="Trustee Users/Administrator Login"><i class="fa fa-btn fa-cogs"></i></button>
@@ -55,9 +59,6 @@
 									</span>
 								</div>
 							@endif
-						</div>
-						<div id="uport_indicator" style="text-align: center;display:none;">
-							<i class="fa fa-spinner fa-spin fa-pulse fa-2x fa-fw"></i><span id="modaltext" style="margin:10px">Loading uPort...</span><br><br>
 						</div>
 					</div>
 					<input type="hidden" id="admin_set_id" value="no">
@@ -114,13 +115,11 @@
 						@if (!isset($nooauth))
 						<div class="form-group">
 							<div class="col-md-8 col-md-offset-2">
-								<button type="button" class="btn btn-primary btn-block" onclick="loginBtnClick()">
+								<a href="{{ route('login_vp') }}" type="button" class="btn btn-primary btn-block">
 									Sign In with Credential Wallet
-								</button>
-								<button type="button" class="btn btn-primary btn-block" id="connectUportBtn1"><i class="fa fa-btn fa-plus"></i> Add Doximity Clinician Verification</button>
+								</a>
+								<button type="button" class="btn btn-primary btn-block" id="addVerificationBtn"><i class="fa fa-btn fa-plus"></i> Add Doximity Clinician Verification</button>
 
-								<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn1" onclick="uportConnect()">Connect uPort</button> -->
-								<!-- <button type="button" class="btn btn-primary btn-block" id="connectUportBtn2" onclick="sendEther()">Send Ether</button> -->
 								<!-- @if (isset($google))
 									<a class="btn btn-primary btn-block" href="{{ url('/google') }}">
 										<i class="fa fa-btn fa-google"></i> Login with Google
@@ -135,6 +134,26 @@
 							<div class="col-md-8 col-md-offset-8">
 
 							</div>
+						</div>
+						@endif
+						@if (isset($vp_request_url))
+						<div class="form-group">
+							<div style="text-align: center;">
+								<p>Please scan this QR code with your credential wallet to proceed:</p>
+								<!-- QR-Code:{{$vp_request_url}} -->
+								{!! QrCode::size(300)->generate($vp_request_url) !!}
+								<p id="errors"></p>
+<!--
+								<p>The code expires {{ $vp_request_expiration->shortRelativeToNowDiffForHumans() }}.</p>
+							</div>
+-->
+						</div>
+						@endif
+						@if ($errors->has('tryagain') && isset($vp_received))
+						<div class="col-md-6 col-md-offset-3">
+							<a href="?retry_vp=1" class="btn btn-primary btn-block">
+								Try again
+							</a>
 						</div>
 						@endif
 					</form>
@@ -152,9 +171,9 @@
 	<div class="modal-dialog">
 	  <!-- Modal content-->
 		<div class="modal-content">
-			<div id="modal1_header" class="modal-header">Add clinician credential to uPort from Doximity?</div>
+			<div id="modal1_header" class="modal-header">Add clinician credential to credential wallet from Doximity?</div>
 			<div id="modal1_body" class="modal-body" style="height:30vh;overflow-y:auto;">
-				<p>We're demonstrating the addition of a verified credential to a blockchain identity by using Doximity. Anyone with a Doximity sign in is able to add this credential.</p>
+				<p>We're demonstrating the addition of a verified credential to a cryptographic identity by using Doximity. Anyone with a Doximity sign in is able to add this credential.</p>
 				<p>Please review Doximity's user verification policies before trusting this credential for any particular purpose.</p>
 				<!-- <p>This will simulate adding a verified credential to your existing uPort.</p>
 				<p>Clicking proceed with add a simulated NPI number</p>
@@ -173,14 +192,11 @@
 @endsection
 
 @section('view.scripts')
-<script src="{{ asset('assets/js/web3.js') }}"></script>
-<script src="{{ asset('assets/js/uport-connect.js') }}"></script>
-<script src="{{ asset('assets/js/toastr.min.js') }}"></script>
 <script type="text/javascript">
 	$(document).ready(function() {
 		$("#username").focus();
 		$('[data-toggle="tooltip"]').tooltip();
-		$("#connectUportBtn1").click(function(){
+		$("#addVerificationBtn").click(function(){
             $('#modal1').modal('show');
         });
 		$('#doximity_modal').click(function(){
@@ -196,99 +212,40 @@
 			}
 		});
 	});
-	// Setup
-	const Connect = window.uportconnect;
-	const appName = 'Trustee Directory';
-	const uport = new Connect(appName, {
-		'network': 'rinkeby'
-	});
-
-	const loginBtnClick = () => {
-		$('#uport_indicator').show();
-		uport.requestDisclosure({
-			requested: ['name', 'email', 'NPI'],
-			notifications: true // We want this if we want to recieve credentials
-	    });
-	    uport.onResponse('disclosureReq').then((res) => {
-			var uport_url = '<?php echo route("login_uport"); ?>';
-			if ($('#admin_set_id').val() == 'yes') {
-				uport_url += '/admin';
+	@if (isset($vp_request_url))
+	var pollUrl = {!! json_encode(route('login_vp_poll')) !!};
+	var csrfToken = $("meta[name='csrf-token']").attr('content');
+	var interval = 3e3;
+	function pollLogin() {
+		var xhr = new XMLHttpRequest();
+		xhr.onreadystatechange = function () {
+			if (this.readyState !== 4) return;
+			switch (this.status) {
+			case 200: // Login completed
+				return location.reload();
+			case 410: // VP request expired
+				errors.innerText = 'Your QR code expired. Please reload the page to get a new one.';
+				return;
+			case 400: // VP request not in session
+				errors.innerText = 'There was a problem coordinating with the server. Please reload the page to try again.';
+				return;
+			case 404: // VP request not in db
+				errors.innerText = 'There was a problem with the request. Please reload the page to try again.';
+				return;
+			case 403: // Waiting
+				errors.innerText = '';
+				break;
+			case 0: // Connection error
+				errors.innerText = 'There was a problem communicating with the server. Are you offline?';
+				break;
 			}
-			var uport_data = 'name=' + res.payload.name + '&uport=' + res.payload.did;
-			if (typeof res.payload.NPI !== 'undefined') {
-				uport_data += '&npi=' + res.payload.NPI;
-			}
-			if (typeof res.payload.email !== 'undefined') {
-				uport_data += '&email=' + res.payload.email;
-			}
-			console.log(uport_data);
-			$.ajax({
-				type: "POST",
-				url: uport_url,
-				data: uport_data,
-				dataType: 'json',
-				beforeSend: function(request) {
-					return request.setRequestHeader("X-CSRF-Token", $("meta[name='csrf-token']").attr('content'));
-				},
-				success: function(data){
-					if (data.message !== 'OK') {
-						toastr.error(data.message);
-						// console.log(data);
-					} else {
-						window.location = data.url;
-					}
-				}
-			});
-		}, console.err);
-	};
-
-	let globalState = {
-		uportId: "",
-		txHash: "",
-		sendToAddr: "0x687422eea2cb73b5d3e242ba5456b782919afc85",
-		sendToVal: "5"
-	};
-
-	const uportConnect = function () {
-		web3.eth.getCoinbase((error, address) => {
-			if (error) { throw error; }
-			console.log(address);
-			globalState.uportId = address;
-		});
-	};
-
-	const sendEther = () => {
-		const value = parseFloat(globalState.sendToVal) * 1.0e18;
-		const gasPrice = 100000000000;
-		const gas = 500000;
-		web3.eth.sendTransaction(
-			{
-				from: globalState.uportId,
-				to: globalState.sendToAddr,
-				value: value,
-				gasPrice: gasPrice,
-				gas: gas
-			},
-			(error, txHash) => {
-				if (error) { throw error; }
-				globalState.txHash = txHash;
-				console.log(txHash);
-			}
-		);
-	};
-
-	const attest = () => {
-		connect.requestCredentials({
-	      requested: ['name', 'phone', 'country', 'email', 'description'],
-	      notifications: true // We want this if we want to recieve credentials
-	    }).then((credentials) => {
-			console.log(credentials);
-			connect.attestCredentials({
-			  sub: credentials.address,
-			  claim: { "NPI": "1023005410" },
-			  exp: new Date().getTime() + 30 * 24 * 60 * 60 * 1000
-			})
-		});
+			setTimeout(pollLogin, interval);
+		};
+		xhr.open('POST', pollUrl);
+		xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+		xhr.send(null);
 	}
+	pollLogin()
+	@endif
 </script>
 @endsection

@@ -74,8 +74,9 @@ Route::get('check', ['as' => 'check', 'uses' => 'OauthController@check']);
 Route::get('check_as', ['as' => 'check_as', 'uses' => 'OauthController@check_as']);
 Route::post('mailgun', ['as' => 'mailgun', 'uses' => 'OauthController@mailgun']);
 Route::any('login', ['as' => 'login', 'uses' => 'OauthController@login']);
+Route::any('login_vp', ['as' => 'login_vp', 'uses' => 'OauthController@login_vp']);
+Route::any('login_vp_poll', ['as' => 'login_vp_poll', 'middleware' => 'csrf', 'uses' => 'OauthController@login_vp_poll']);
 Route::any('logout', ['as' => 'logout', 'uses' => 'OauthController@logout']);
-Route::post('login_uport/{admin?}', ['as' => 'login_uport', 'middleware' => 'csrf', 'uses' => 'OauthController@login_uport']);
 Route::any('uport_user_add', ['as' => 'uport_user_add', 'uses' => 'OauthController@uport_user_add']);
 Route::any('remote_logout', ['as' => 'remote_logout', 'uses' => 'OauthController@remote_logout']);
 Route::get('home', ['as' => 'home', 'uses' => 'HomeController@index']);
@@ -206,6 +207,7 @@ Route::get('doximity_redirect', ['as' => 'doximity_redirect', 'uses' => 'OauthCo
 Route::get('doximity_start', ['as' => 'doximity_start', 'uses' => 'OauthController@doximity_start']);
 Route::get('doximity_vc', ['as' => 'doximity_vc', 'uses' => 'OauthController@doximity_vc']);
 Route::any('vc_offer', ['as' => 'vc_offer', 'uses' => 'OauthController@vc_offer']);
+Route::any('vp_request', ['as' => 'vp_request', 'uses' => 'OauthController@vp_request']);
 // Configuration endpoints
 Route::get('.well-known/openid-configuration', ['as' => 'openid-configuration', function () {
     $scopes = DB::table('oauth_scopes')->get();
